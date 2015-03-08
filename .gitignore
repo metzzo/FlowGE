@@ -1,6 +1,4 @@
-node_modules/
-bower_components/
-*.log
-
-build/
-dist/
+node_modules
+dist
+.tmp
+bower_components
