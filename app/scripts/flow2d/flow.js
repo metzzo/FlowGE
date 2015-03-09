@@ -32,19 +32,6 @@ var flow = (function() {
     };
   };
 
-  var makeFunctionSetter = function(key) {
-    return function(value) {
-      var oldValue = oldValue;
-      var self = this;
-      value = function() {
-        var result = oldValue.apply(this, arguments);
-        self.__notify();
-        return result;
-      };
-      this.__notify(key, value);
-    };
-  };
-
   var makeObjectSetter = function(key) {
     return function(value) {
       if (!value.__subscriber) {
@@ -86,6 +73,11 @@ var flow = (function() {
       '__lastUpdated': {
         'value': 0,
         'writable': true,
+        'enumerable': false
+      },
+      '__tmpObj': {
+        value: tmpObj,
+        'writable': false,
         'enumerable': false
       },
       '__update': {
@@ -151,15 +143,22 @@ var flow = (function() {
         'writable': false,
         'enumerable': false
       },
-      'extend': {
+      'link': {
         'writable': false,
-        'enumerable': 'false',
+        'enumerable': false,
         'value': function(obj) {
           for (var key in newObj) {
             if (obj[key] === undefined) {
               obj[key] = newObj[key];
             }
           }
+
+          /*for (var key in obj) {
+            if (newObj[key] === undefined) {
+              newObj[key] = obj[key];
+            }
+          }*/
+
 
           if (!obj.__subscriber) {
             obj = flow.signal(obj);
@@ -168,14 +167,18 @@ var flow = (function() {
           // proxy all changes between objects
           var oldNotify = obj.__notify;
           obj.__notify = function(key, value, old) {
-            newObj.__notify(key, value, old);
-            oldNotify(key, value, old);
+            if (obj.__tmpObj[key] !== value) {
+              oldNotify(key, value, old);
+              newObj.__notify(key, value, old);
+            }
           };
 
           var oldNotify2 = newObj.__notify;
           newObj.__notify = function(key, value, old) {
-            obj.__notify(key, value, old);
-            oldNotify2(key, value, old);
+            if (newObj.__tmpObj[key] !== value) {
+              oldNotify2(key, value, old);
+              obj.__notify(key, value, old);
+            }
           };
 
           return obj;
@@ -210,7 +213,7 @@ var flow = (function() {
         makeChangeBubbling(obj, key);
         setter = makeObjectSetter;
       } else if (type === 'function') {
-        setter = makeFunctionSetter;
+        setter = makePrimitiveSetter;
       } else {
         throw new Error('Cannot make signal of type '+type);
       }

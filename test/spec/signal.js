@@ -152,24 +152,28 @@
       expect(value).to.deep.equal([4, 5, 6]);
     });
 
-    it('handles extend properly', function() {
-
-
+    it('handles link properly', function() {
       var baseSignal = flow.signal({
         value: 42,
         value2: 48
       });
 
-      var superSignal = baseSignal.extend({
+      var superSignal = baseSignal.link({
         value:1337
       });
 
       var value1, value2, value3;
+      var oldValue1, oldValue2, oldValue3;
       flow.on(superSignal, function(old) {
         value1 = this.value;
+        value3 = this.value2;
+
+        oldValue1 = old.value;
+        oldValue3 = old.value2;
       });
       flow.on(baseSignal, function(old) {
         value2 = this.value;
+        oldValue2 = old.value;
       });
 
       superSignal.value = 100;
@@ -178,6 +182,10 @@
 
       expect(value1).to.equal(100);
       expect(value2).to.equal(100);
+      expect(value3).to.equal(48);
+      expect(oldValue1).to.equal(42);
+      expect(oldValue2).to.equal(48);
+      expect(oldValue3).to.equal(42);
     })
   });
 })();
