@@ -158,13 +158,13 @@
         value2: 48
       });
 
-      var superSignal = baseSignal.link({
+      var childSignal = baseSignal.link({
         value:1337
       });
 
       var value1, value2, value3;
       var oldValue1, oldValue2, oldValue3;
-      flow.on(superSignal, function(old) {
+      flow.on(childSignal, function(old) {
         value1 = this.value;
         value3 = this.value2;
 
@@ -176,16 +176,68 @@
         oldValue2 = old.value;
       });
 
-      superSignal.value = 100;
+      childSignal.value = 100;
 
       flow.updateAll();
 
       expect(value1).to.equal(100);
       expect(value2).to.equal(100);
       expect(value3).to.equal(48);
-      expect(oldValue1).to.equal(42);
-      expect(oldValue2).to.equal(48);
-      expect(oldValue3).to.equal(42);
-    })
+      expect(oldValue1).to.equal(1337);
+      expect(oldValue2).to.equal(42);
+      expect(oldValue3).to.equal(48);
+    });
+
+    it('handles functions properly', function() {
+      var signal = flow.signal({
+        foo: function() {
+          this.value = 1337;
+        },
+        value: 42
+      });
+      var val, oldVal;
+      flow.on(signal, function(old) {
+        val = this.value;
+        oldVal = old.value;
+      });
+      signal.foo();
+
+      flow.updateAll();
+
+      expect(val).to.equal(1337);
+      expect(oldVal).to.equal(42);
+    });
+
+    it('properly resolves values before doing data flow', function() {
+      var signal1 = flow.signal({
+        value1: 42
+      });
+
+      var signal2 = flow.signal({
+        value2: 1337
+      });
+
+      var val1, val1old;
+      var val2, val2old;
+      flow.on(signal2, function(old) {
+        val1 = signal1.value1;
+        val1old = old.value2;
+      });
+
+      flow.on(signal1, function(old) {
+        val2 = signal2.value2;
+        val2old = old.value1;
+      });
+
+      signal1.value1 = 10;
+      signal2.value2 = 15;
+
+      flow.updateAll();
+
+      expect(val1).to.equal(10);
+      expect(val1old).to.equal(1337);
+      expect(val2).to.equal(15);
+      expect(val2old).to.equal(42);
+    });
   });
 })();

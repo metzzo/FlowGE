@@ -14,21 +14,31 @@ var flow = (function() {
     changed.length = 0;
     var lastUpdateId = updateId;
     updateId++;
+    // first let all the values flow
     for (var i = oldChanged.length - 1; i >= 0; i--) {
       var change = oldChanged[i];
-      change.__update(lastUpdateId);
+      change.__flow(lastUpdateId);
+    }
+
+    // second call subscribers
+    for (var i = oldChanged.length - 1; i >= 0; i--) {
+      var change = oldChanged[i];
+      change.__update();
     }
   };
 
   var updateAll = function() {
+    var count = 0;
     do {
+      if (count > 1000) throw new Error('Too long update chain :(');
       update();
+      count++;
     } while (changed.length > 0);
   };
 
   var makePrimitiveSetter = function(key) {
     return function (value) {
-      this.__notify(key, value);
+      this.__notify(key, value, this.__target[key]);
     };
   };
 
@@ -38,7 +48,14 @@ var flow = (function() {
         value = signal(value);
       }
 
-      this.__notify(key, value);
+      this.__notify(key, value, this.__target[key]);
+    };
+  };
+
+  var makeFunctionSetter = function(key) {
+    return function(value) {
+      value = value.bind(newObj);
+      this.__notify(key, value, this.__target[key]);
     };
   };
 
@@ -80,13 +97,46 @@ var flow = (function() {
         'writable': false,
         'enumerable': false
       },
-      '__update': {
+      '__shouldUpdate': {
+        'value': false,
+        'writable': true,
+        'enumerable': false
+      },
+      '__flow': {
         'writable': false,
+        'enumerable': false,
         'value': function(lastUpdateId) {
           if (newObj.__dirty && newObj.__lastUpdated <= lastUpdateId) {
-            newObj.__lastUpdated = 0;
+            newObj.__shouldUpdate = true;
+            newObj.__dirty = false;
 
-            newObj.__snapshot();
+            for (var key in tmpObj) {
+              var value = tmpObj[key];
+              if (value !== undefined) {
+                // add listener stuff
+                if (value.__subscriber) {
+                  // TODO: test this code path - because it's quite important that this works without mem leaks
+                  // remove old listener
+                  if (oldObj[key].__subscriber) {
+                    flow.off(oldObj[key], newObj);
+                  }
+                  // add new listener
+                  flow.on(value, makeLinkListener(key, this), newObj);
+                }
+
+                newObj.__target[key] = value;
+              }
+            }
+          } else {
+            newObj.__dirty = false;
+          }
+        }
+      },
+      '__update': {
+        'writable': false,
+        'value': function() {
+          if (this.__shouldUpdate) {
+            this.__shouldUpdate = false;
 
             var subscriber = newObj.__subscriber;
             for (var j = 0; j < subscriber.length; j++) {
@@ -104,45 +154,18 @@ var flow = (function() {
         'value': function(key, value, old) {
           if (key !== undefined) {
             tmpObj[key] = value;
-            oldObj[key] = old !== undefined ? old : newObj.__target[key];
+            oldObj[key] = old;
           }
 
+          newObj.__lastUpdated = updateId;
           newObj.__dirty = true;
           changed.push(newObj);
         },
         'writable': true,
         'enumerable': false
       },
-      '__snapshot': {
-        'value': function() {
-          if (newObj.__dirty === false) {
-            return;
-          }
 
-          newObj.__dirty = false;
-
-          for (var key in tmpObj) {
-            var value = tmpObj[key];
-            if (value !== undefined) {
-              // add listener stuff
-              if (value.__subscriber) {
-                // TODO: test this code path - because it's quite important that this works without mem leaks
-                // remove old listener
-                if (oldObj[key].__subscriber) {
-                  flow.off(oldObj[key], newObj);
-                }
-                // add new listener
-                flow.on(value, makeLinkListener(key, this), newObj);
-              }
-
-              newObj.__target[key] = value;
-              tmpObj[key] = undefined;
-            }
-          }
-        },
-        'writable': false,
-        'enumerable': false
-      },
+      // PUBLIC
       'link': {
         'writable': false,
         'enumerable': false,
@@ -153,13 +176,6 @@ var flow = (function() {
             }
           }
 
-          /*for (var key in obj) {
-            if (newObj[key] === undefined) {
-              newObj[key] = obj[key];
-            }
-          }*/
-
-
           if (!obj.__subscriber) {
             obj = flow.signal(obj);
           }
@@ -169,7 +185,8 @@ var flow = (function() {
           obj.__notify = function(key, value, old) {
             if (obj.__tmpObj[key] !== value) {
               oldNotify(key, value, old);
-              newObj.__notify(key, value, old);
+              var oldVal = newObj[key];
+              newObj.__notify(key, value, oldVal !== undefined ? oldVal : old);
             }
           };
 
@@ -177,12 +194,18 @@ var flow = (function() {
           newObj.__notify = function(key, value, old) {
             if (newObj.__tmpObj[key] !== value) {
               oldNotify2(key, value, old);
-              obj.__notify(key, value, old);
+              var oldVal = obj[key];
+              obj.__notify(key, value, oldVal !== undefined ? oldVal : old);
             }
           };
 
           return obj;
         }
+      },
+      'oldState': {
+        'value': oldObj,
+        'writable': false,
+        'enumerable': false
       }
     });
 
@@ -213,7 +236,8 @@ var flow = (function() {
         makeChangeBubbling(obj, key);
         setter = makeObjectSetter;
       } else if (type === 'function') {
-        setter = makePrimitiveSetter;
+        obj[key] = obj[key].bind(newObj);
+        setter = makeFunctionSetter;
       } else {
         throw new Error('Cannot make signal of type '+type);
       }

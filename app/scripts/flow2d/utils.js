@@ -7,7 +7,15 @@
 flow.vec2d = function(x, y) {
   var signal = flow.signal({
     x: x,
-    y: y
+    y: y,
+    add: function(vec) {
+      this.x += vec.x;
+      this.y += vec.y;
+    },
+    sub: function(vec) {
+      this.x -= vec.x;
+      this.y -= vec.y;
+    }
   });
 
   return signal;
