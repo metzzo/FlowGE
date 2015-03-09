@@ -131,6 +131,8 @@
 
       expect(value1).to.equal(1337);
       expect(value2).to.equal(1337);
+      expect(oldValue1).to.equal(1000);
+      expect(oldValue2).to.equal(1000);
     });
 
     it('handles array properly', function() {
@@ -149,5 +151,33 @@
 
       expect(value).to.deep.equal([4, 5, 6]);
     });
+
+    it('handles extend properly', function() {
+
+
+      var baseSignal = flow.signal({
+        value: 42,
+        value2: 48
+      });
+
+      var superSignal = baseSignal.extend({
+        value:1337
+      });
+
+      var value1, value2, value3;
+      flow.on(superSignal, function(old) {
+        value1 = this.value;
+      });
+      flow.on(baseSignal, function(old) {
+        value2 = this.value;
+      });
+
+      superSignal.value = 100;
+
+      flow.updateAll();
+
+      expect(value1).to.equal(100);
+      expect(value2).to.equal(100);
+    })
   });
 })();

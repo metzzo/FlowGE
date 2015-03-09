@@ -22,7 +22,7 @@ var flow = (function() {
 
   var updateAll = function() {
     do {
-      update()
+      update();
     } while (changed.length > 0);
   };
 
@@ -32,13 +32,26 @@ var flow = (function() {
     };
   };
 
+  var makeFunctionSetter = function(key) {
+    return function(value) {
+      var oldValue = oldValue;
+      var self = this;
+      value = function() {
+        var result = oldValue.apply(this, arguments);
+        self.__notify();
+        return result;
+      };
+      this.__notify(key, value);
+    };
+  };
+
   var makeObjectSetter = function(key) {
     return function(value) {
-      var subSignal = signal(value);
-      subSignal.__parent = this;
-      subSignal.__parentKey = key;
+      if (!value.__subscriber) {
+        value = signal(value);
+      }
 
-      this.__notify(key, subSignal);
+      this.__notify(key, value);
     };
   };
 
@@ -52,7 +65,8 @@ var flow = (function() {
   var signal = function(obj) {
     var tmpObj = {}; // this object is used to 'save' object saves
     var oldObj = {}; // used to keep old state of object
-    var newObj = {} ;
+    var newObj = {}; // used to keep new state of object
+
     Object.defineProperties(newObj, {
       '__target': {
         'value': obj,
@@ -62,16 +76,6 @@ var flow = (function() {
       '__subscriber': {
         'value': [],
         'writable': false,
-        'enumerable': false
-      },
-      '__parent': {
-        'value': null,
-        'writable': true,
-        'enumerable': false
-      },
-      '__parentKey': {
-        'value': null,
-        'writable': true,
         'enumerable': false
       },
       '__dirty': {
@@ -90,15 +94,11 @@ var flow = (function() {
           if (newObj.__dirty && newObj.__lastUpdated <= lastUpdateId) {
             newObj.__lastUpdated = 0;
 
-            if (newObj.__parent !== null) {
-              newObj.__parent.__update(lastUpdateId);
-            } else {
-              newObj.__snapshot();
+            newObj.__snapshot();
 
-              var subscriber = newObj.__subscriber;
-              for (var j = 0; j < subscriber.length; j++) {
-                subscriber[j].func.call(newObj, oldObj);
-              }
+            var subscriber = newObj.__subscriber;
+            for (var j = 0; j < subscriber.length; j++) {
+              subscriber[j].func.call(newObj, oldObj);
             }
 
             for (var attrKey in tmpObj) {
@@ -109,16 +109,16 @@ var flow = (function() {
         'enumerable': false
       },
       '__notify': {
-        'value': function(key, value) {
-          tmpObj[key] = value;
-          newObj.__dirty = true;
-
-          if (newObj.__parent !== null) {
-            newObj.__parent.__notify(newObj.__parentKey, newObj);
+        'value': function(key, value, old) {
+          if (key !== undefined) {
+            tmpObj[key] = value;
+            oldObj[key] = old !== undefined ? old : newObj.__target[key];
           }
+
+          newObj.__dirty = true;
           changed.push(newObj);
         },
-        'writable': false,
+        'writable': true,
         'enumerable': false
       },
       '__snapshot': {
@@ -132,26 +132,66 @@ var flow = (function() {
           for (var key in tmpObj) {
             var value = tmpObj[key];
             if (value !== undefined) {
-              if (value.__parent) {
-                oldObj[key] = value.__snapshot();
-              } else {
-                oldObj[key] = newObj.__target[key];
-                newObj.__target[key] = value;
+              // add listener stuff
+              if (value.__subscriber) {
+                // TODO: test this code path - because it's quite important that this works without mem leaks
+                // remove old listener
+                if (oldObj[key].__subscriber) {
+                  flow.off(oldObj[key], newObj);
+                }
+                // add new listener
+                flow.on(value, makeLinkListener(key, this), newObj);
               }
+
+              newObj.__target[key] = value;
               tmpObj[key] = undefined;
             }
           }
-
-          return oldObj;
         },
         'writable': false,
         'enumerable': false
+      },
+      'extend': {
+        'writable': false,
+        'enumerable': 'false',
+        'value': function(obj) {
+          for (var key in newObj) {
+            if (obj[key] === undefined) {
+              obj[key] = newObj[key];
+            }
+          }
+
+          if (!obj.__subscriber) {
+            obj = flow.signal(obj);
+          }
+
+          // proxy all changes between objects
+          var oldNotify = obj.__notify;
+          obj.__notify = function(key, value, old) {
+            newObj.__notify(key, value, old);
+            oldNotify(key, value, old);
+          };
+
+          var oldNotify2 = newObj.__notify;
+          newObj.__notify = function(key, value, old) {
+            obj.__notify(key, value, old);
+            oldNotify2(key, value, old);
+          };
+
+          return obj;
+        }
       }
     });
 
+    var makeLinkListener = function(key, obj) {
+      return function (old) {
+        this.__notify(key, obj, old);
+      };
+    };
+
     var makeChangeBubbling = function(obj, key) {
       flow.on(obj[key], function(old) {
-        newObj.__notify(key, this);
+        newObj.__notify(key, this, old);
       });
     };
 
@@ -163,17 +203,14 @@ var flow = (function() {
       } else if (Array.isArray(obj[key])) {
         setter = makePrimitiveSetter;
       } else if (type === 'object') {
-        if (obj[key].__subscriber) {
-          // already a signal
-          makeChangeBubbling(obj, key);
-        } else {
-          // raw object
-          var subSignal = signal(obj[key]);
-          subSignal.__parent = newObj;
-          subSignal.__parentKey = key;
-          obj[key] = subSignal;
+        if (!obj[key].__subscriber) {
+          // raw object => make into signal
+          obj[key] = signal(obj[key]);
         }
+        makeChangeBubbling(obj, key);
         setter = makeObjectSetter;
+      } else if (type === 'function') {
+        setter = makeFunctionSetter;
       } else {
         throw new Error('Cannot make signal of type '+type);
       }
@@ -191,22 +228,37 @@ var flow = (function() {
     return newObj;
   };
 
-  var on = function(signal, func) {
+  var on = function(signal, func, tag) {
     if (!Array.isArray(signal.__subscriber)) {
       throw new Error('Expecting signal');
     }
 
     var subscriber = {
       func: func,
-      signal: signal
+      signal: signal,
+      tag: tag
     };
     signal.__subscriber.push(subscriber);
 
     return subscriber;
   };
 
+  var off = function(signal, info) {
+    if (!Array.isArray(signal.__subscriber)) {
+      throw new Error('Expecting signal');
+    }
+
+    for (var i = 0; i < signal.__subscriber.length; i++) {
+      if (signal.__subscriber[i].func === info || signal.__subscriber[i].tag === info) {
+        signal.__subscriber.splice(i, 1);
+        break;
+      }
+    }
+  };
+
   return {
     on: on,
+    off: off,
     signal: signal,
     update: update,
     updateAll: updateAll
