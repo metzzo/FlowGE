@@ -21,8 +21,8 @@
       expect(entity.components[1].parent).to.equal(entity);
       expect(entity.components[2].parent).to.equal(entity);
       expect(entity.components[0].name).to.equal('name1');
-      expect(entity.components[0].name).to.equal('name2');
-      expect(entity.components[0].name).to.equal('name3');
+      expect(entity.components[1].name).to.equal('name2');
+      expect(entity.components[2].name).to.equal('name3');
     });
   });
 })();

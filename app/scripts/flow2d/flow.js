@@ -36,25 +36,33 @@ var flow = (function() {
     } while (changed.length > 0);
   };
 
-  var makePrimitiveSetter = function(key) {
+  var makeSetter = function(key) {
     return function (value) {
-      this.__notify(key, value, this.__target[key]);
-    };
-  };
+      switch (typeof value) {
+        case 'function':
+          value = value.bind(this);
+          break;
+        case 'object':
+          if (!Array.isArray(this[key])) {
+            if (!value.__subscriber) {
+              value = signal(value);
+            }
 
-  var makeObjectSetter = function(key) {
-    return function(value) {
-      if (!value.__subscriber) {
-        value = signal(value);
+            // remove old listener
+            if (this[key].__subscriber) {
+              flow.off(this[key], this);
+            }
+
+            // add new listener
+            var self = this;
+            flow.on(value, function(old) {
+              self.__notify(key, this, old);
+            }, self);
+          }
+
+          break;
       }
 
-      this.__notify(key, value, this.__target[key]);
-    };
-  };
-
-  var makeFunctionSetter = function(key) {
-    return function(value) {
-      value = value.bind(newObj);
       this.__notify(key, value, this.__target[key]);
     };
   };
@@ -106,24 +114,13 @@ var flow = (function() {
         'writable': false,
         'enumerable': false,
         'value': function(lastUpdateId) {
-          if (newObj.__dirty && newObj.__lastUpdated <= lastUpdateId) {
+          if ((newObj.__dirty && newObj.__lastUpdated <= lastUpdateId) || lastUpdateId === -1) {
             newObj.__shouldUpdate = true;
             newObj.__dirty = false;
 
             for (var key in tmpObj) {
               var value = tmpObj[key];
               if (value !== undefined) {
-                // add listener stuff
-                if (value.__subscriber) {
-                  // TODO: test this code path - because it's quite important that this works without mem leaks
-                  // remove old listener
-                  if (oldObj[key].__subscriber) {
-                    flow.off(oldObj[key], newObj);
-                  }
-                  // add new listener
-                  flow.on(value, makeLinkListener(key, this), newObj);
-                }
-
                 newObj.__target[key] = value;
               }
             }
@@ -152,6 +149,10 @@ var flow = (function() {
       },
       '__notify': {
         'value': function(key, value, old) {
+          if (tmpObj[key] === value || (tmpObj[key] === undefined && newObj[key] === value)) {
+            // return;
+          }
+
           if (key !== undefined) {
             tmpObj[key] = value;
             oldObj[key] = old;
@@ -209,48 +210,18 @@ var flow = (function() {
       }
     });
 
-    var makeLinkListener = function(key, obj) {
-      return function (old) {
-        this.__notify(key, obj, old);
-      };
-    };
-
-    var makeChangeBubbling = function(obj, key) {
-      flow.on(obj[key], function(old) {
-        newObj.__notify(key, this, old);
-      });
-    };
-
     for (var key in obj) {
-      var type = typeof obj[key];
-      var setter, getter = makeGetter;
-      if (type === 'string' || type === 'number' || type === 'boolean' || type === 'null' || type === 'undefined') {
-        setter = makePrimitiveSetter;
-      } else if (Array.isArray(obj[key])) {
-        setter = makePrimitiveSetter;
-      } else if (type === 'object') {
-        if (!obj[key].__subscriber) {
-          // raw object => make into signal
-          obj[key] = signal(obj[key]);
-        }
-        makeChangeBubbling(obj, key);
-        setter = makeObjectSetter;
-      } else if (type === 'function') {
-        obj[key] = obj[key].bind(newObj);
-        setter = makeFunctionSetter;
-      } else {
-        throw new Error('Cannot make signal of type '+type);
-      }
-
       Object.defineProperty(newObj, key, {
         configurable: false,
         enumerable: true,
-        get: getter(key),
-        set: setter(key)
+        get: makeGetter(key),
+        set: makeSetter(key)
       });
-
-      oldObj[key] = newObj[key];
+      newObj[key] = obj[key];
+      oldObj[key] = obj[key];
     }
+    newObj.__flow(-1);
+    newObj.__update();
 
     return newObj;
   };
